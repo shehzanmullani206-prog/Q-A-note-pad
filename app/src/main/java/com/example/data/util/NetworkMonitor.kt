@@ -37,14 +37,23 @@ class NetworkMonitor(private val context: Context) {
         // Send initial state
         trySend(isCurrentlyConnected())
 
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-
-        connectivityManager?.registerNetworkCallback(request, callback)
+        var registered = false
+        try {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            connectivityManager?.registerNetworkCallback(request, callback)
+            registered = true
+        } catch (_: Exception) {
+            // Safe fallback if network callback registration fails
+        }
 
         awaitClose {
-            connectivityManager?.unregisterNetworkCallback(callback)
+            if (registered) {
+                try {
+                    connectivityManager?.unregisterNetworkCallback(callback)
+                } catch (_: Exception) {}
+            }
         }
     }.distinctUntilChanged()
 
