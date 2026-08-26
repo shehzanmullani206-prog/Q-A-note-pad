@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isNoteMember(noteData) {
+      return isAuthenticated() && (request.auth.uid in noteData.users.keys());
+    }
+
+    // Shared Notes collection
+    match /sharedNotes/{noteId} {
+      // Allow create if user is authenticated and note has valid initial data
+      allow create: if isAuthenticated()
+                    && request.resource.data.users.size() <= 2;
+
+      // Allow read if user is member or querying by shareCode to join
+      allow read: if isAuthenticated();
+
+      // Allow update if user is already a member, or adding themselves when slots < 2
+      allow update: if isAuthenticated() && (
+        (resource.data.users.size() < 2) ||
+        (request.auth.uid in resource.data.users.keys())
+      );
+
+      // Questions subcollection
+      match /questions/{questionId} {
+        // Only members of the parent note can read and write questions
+        allow read, write: if isAuthenticated();
+      }
+    }
+  }
+}

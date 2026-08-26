@@ -1,0 +1,6 @@
+{
+  "name": "Q&A Notes",
+  "description": "Real-time collaborative 2-user Q&A notes app with live question creation, answer editing, formatting sync, and share codes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
