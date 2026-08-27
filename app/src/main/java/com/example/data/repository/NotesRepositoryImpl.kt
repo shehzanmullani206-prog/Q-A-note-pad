@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import android.util.Log
+import com.example.FirebaseConfigHelper
 import com.example.data.model.QuestionItem
 import com.example.data.model.SharedNote
 import com.example.data.model.TextFormatting
@@ -17,12 +18,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.security.SecureRandom
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-// Extension to await Google Play Tasks safely
+// Extension to await Google Play Tasks safely with cancellation
 suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { cont ->
     addOnSuccessListener { result ->
         if (cont.isActive) cont.resume(result)
@@ -37,8 +39,8 @@ suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { cont ->
 
 class NotesRepositoryImpl : NotesRepository {
 
-    // Lazy safe initialization to avoid crashes when FirebaseApp is initializing or fallback is used
     private val firestoreInstance: FirebaseFirestore? by lazy {
+        if (!FirebaseConfigHelper.isRealConfig) return@lazy null
         try {
             val db = FirebaseFirestore.getInstance()
             try {
@@ -46,42 +48,46 @@ class NotesRepositoryImpl : NotesRepository {
                     .setPersistenceEnabled(true)
                     .build()
                 db.firestoreSettings = settings
-            } catch (_: Exception) {
-                // Settings may already be locked
-            }
+            } catch (_: Exception) {}
             db
         } catch (e: Throwable) {
-            Log.w("NotesRepositoryImpl", "Firestore unavailable, using robust in-memory fallback: ${e.message}")
+            Log.w("NotesRepositoryImpl", "Firestore init skipped: ${e.message}")
             null
         }
     }
 
     private val authInstance: FirebaseAuth? by lazy {
+        if (!FirebaseConfigHelper.isRealConfig) return@lazy null
         try {
             FirebaseAuth.getInstance()
         } catch (e: Throwable) {
-            Log.w("NotesRepositoryImpl", "FirebaseAuth unavailable: ${e.message}")
+            Log.w("NotesRepositoryImpl", "FirebaseAuth init skipped: ${e.message}")
             null
         }
     }
 
-    // In-Memory Fallback Storage (guarantees 100% crash-free offline operation if Firebase isn't configured)
+    // In-Memory Real-Time Storage
     private val fallbackNotes = MutableStateFlow<Map<String, SharedNote>>(emptyMap())
     private val fallbackQuestions = MutableStateFlow<Map<String, List<QuestionItem>>>(emptyMap())
 
     override suspend fun ensureAuth(): String {
-        return try {
-            val auth = authInstance ?: return "user_local_" + UUID.randomUUID().toString().take(6)
-            val currentUser = auth.currentUser
-            if (currentUser != null) {
-                currentUser.uid
-            } else {
-                val authResult = auth.signInAnonymously().awaitTask()
-                authResult.user?.uid ?: "user_anon"
+        val auth = authInstance
+        if (auth != null && FirebaseConfigHelper.isRealConfig) {
+            try {
+                val currentUser = auth.currentUser
+                if (currentUser != null) {
+                    return currentUser.uid
+                }
+                val authResult = withTimeoutOrNull(2500L) {
+                    auth.signInAnonymously().awaitTask()
+                }
+                val uid = authResult?.user?.uid
+                if (!uid.isNullOrEmpty()) return uid
+            } catch (e: Throwable) {
+                Log.w("NotesRepositoryImpl", "Auth failed: ${e.message}")
             }
-        } catch (e: Throwable) {
-            authInstance?.currentUser?.uid ?: ("user_local_" + UUID.randomUUID().toString().take(6))
         }
+        return "user_local_" + UUID.randomUUID().toString().take(6)
     }
 
     private fun generateShareCode(): String {
@@ -99,6 +105,8 @@ class NotesRepositoryImpl : NotesRepository {
     ): Result<SharedNote> {
         val shareCode = generateShareCode()
         val now = System.currentTimeMillis()
+        val fallbackId = "note_" + UUID.randomUUID().toString().replace("-", "").take(8)
+
         val creator = UserInfo(
             userId = userId,
             name = userName,
@@ -107,41 +115,7 @@ class NotesRepositoryImpl : NotesRepository {
             isOnline = true
         )
 
-        val firestore = firestoreInstance
-        if (firestore != null) {
-            try {
-                ensureAuth()
-                val noteDoc = firestore.collection("sharedNotes").document()
-                val noteId = noteDoc.id
-
-                val noteData = hashMapOf(
-                    "noteId" to noteId,
-                    "shareCode" to shareCode,
-                    "title" to title,
-                    "createdAt" to now,
-                    "updatedAt" to now,
-                    "users" to mapOf(userId to creator.toMap())
-                )
-
-                noteDoc.set(noteData).awaitTask()
-
-                val sharedNote = SharedNote(
-                    noteId = noteId,
-                    shareCode = shareCode,
-                    createdAt = now,
-                    updatedAt = now,
-                    users = mapOf(userId to creator),
-                    title = title
-                )
-                return Result.success(sharedNote)
-            } catch (e: Throwable) {
-                Log.w("NotesRepositoryImpl", "Firestore createNote failed, falling back to memory: ${e.message}")
-            }
-        }
-
-        // Fallback local note
-        val fallbackId = "note_" + UUID.randomUUID().toString().replace("-", "").take(8)
-        val note = SharedNote(
+        val initialNote = SharedNote(
             noteId = fallbackId,
             shareCode = shareCode,
             createdAt = now,
@@ -149,9 +123,48 @@ class NotesRepositoryImpl : NotesRepository {
             users = mapOf(userId to creator),
             title = title
         )
-        fallbackNotes.value = fallbackNotes.value + (fallbackId to note)
+
+        // Always populate memory cache first for zero-lag instant UI responsiveness
+        fallbackNotes.value = fallbackNotes.value + (fallbackId to initialNote)
         fallbackQuestions.value = fallbackQuestions.value + (fallbackId to emptyList())
-        return Result.success(note)
+
+        val firestore = firestoreInstance
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
+            try {
+                val onlineNote = withTimeoutOrNull(2500L) {
+                    val noteDoc = firestore.collection("sharedNotes").document()
+                    val noteId = noteDoc.id
+                    val noteData = hashMapOf(
+                        "noteId" to noteId,
+                        "shareCode" to shareCode,
+                        "title" to title,
+                        "createdAt" to now,
+                        "updatedAt" to now,
+                        "users" to mapOf(userId to creator.toMap())
+                    )
+                    noteDoc.set(noteData).awaitTask()
+
+                    val createdSharedNote = SharedNote(
+                        noteId = noteId,
+                        shareCode = shareCode,
+                        createdAt = now,
+                        updatedAt = now,
+                        users = mapOf(userId to creator),
+                        title = title
+                    )
+                    fallbackNotes.value = fallbackNotes.value + (noteId to createdSharedNote)
+                    fallbackQuestions.value = fallbackQuestions.value + (noteId to emptyList())
+                    createdSharedNote
+                }
+                if (onlineNote != null) {
+                    return Result.success(onlineNote)
+                }
+            } catch (e: Throwable) {
+                Log.w("NotesRepositoryImpl", "Firestore createNote timed out or failed, using local: ${e.message}")
+            }
+        }
+
+        return Result.success(initialNote)
     }
 
     override suspend fun joinNote(
@@ -165,50 +178,56 @@ class NotesRepositoryImpl : NotesRepository {
         }
 
         val firestore = firestoreInstance
-        if (firestore != null) {
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
             try {
-                ensureAuth()
-                val querySnapshot = firestore.collection("sharedNotes")
-                    .whereEqualTo("shareCode", cleanCode)
-                    .limit(1)
-                    .get()
-                    .awaitTask()
+                val result = withTimeoutOrNull(3000L) {
+                    val querySnapshot = firestore.collection("sharedNotes")
+                        .whereEqualTo("shareCode", cleanCode)
+                        .limit(1)
+                        .get()
+                        .awaitTask()
 
-                if (!querySnapshot.isEmpty) {
-                    val doc = querySnapshot.documents[0]
-                    val note = SharedNote.fromDocument(doc)
+                    if (!querySnapshot.isEmpty) {
+                        val doc = querySnapshot.documents[0]
+                        val note = SharedNote.fromDocument(doc)
 
-                    val isAlreadyMember = note.users.containsKey(userId)
-                    if (!isAlreadyMember && note.users.size >= 2) {
-                        return JoinResult.Error("This note already has 2 connected users.")
-                    }
+                        val isAlreadyMember = note.users.containsKey(userId)
+                        if (!isAlreadyMember && note.users.size >= 2) {
+                            return@withTimeoutOrNull JoinResult.Error("This note already has 2 connected users.")
+                        }
 
-                    val now = System.currentTimeMillis()
-                    val userInfo = UserInfo(
-                        userId = userId,
-                        name = userName,
-                        joinedAt = if (isAlreadyMember) (note.users[userId]?.joinedAt ?: now) else now,
-                        lastSeen = now,
-                        isOnline = true
-                    )
-
-                    doc.reference.update(
-                        mapOf(
-                            "users.$userId" to userInfo.toMap(),
-                            "updatedAt" to now
+                        val now = System.currentTimeMillis()
+                        val userInfo = UserInfo(
+                            userId = userId,
+                            name = userName,
+                            joinedAt = if (isAlreadyMember) (note.users[userId]?.joinedAt ?: now) else now,
+                            lastSeen = now,
+                            isOnline = true
                         )
-                    ).awaitTask()
 
-                    val updatedUsers = note.users.toMutableMap()
-                    updatedUsers[userId] = userInfo
-                    return JoinResult.Success(note.copy(users = updatedUsers, updatedAt = now))
+                        doc.reference.update(
+                            mapOf(
+                                "users.$userId" to userInfo.toMap(),
+                                "updatedAt" to now
+                            )
+                        ).awaitTask()
+
+                        val updatedUsers = note.users.toMutableMap()
+                        updatedUsers[userId] = userInfo
+                        val updatedNote = note.copy(users = updatedUsers, updatedAt = now)
+                        fallbackNotes.value = fallbackNotes.value + (updatedNote.noteId to updatedNote)
+                        JoinResult.Success(updatedNote)
+                    } else {
+                        null
+                    }
                 }
+                if (result != null) return result
             } catch (e: Throwable) {
                 Log.w("NotesRepositoryImpl", "Firestore joinNote error: ${e.message}")
             }
         }
 
-        // Check fallback storage
+        // Local cache lookup
         val localNote = fallbackNotes.value.values.find { it.shareCode.equals(cleanCode, ignoreCase = true) }
         if (localNote != null) {
             val isAlreadyMember = localNote.users.containsKey(userId)
@@ -243,20 +262,23 @@ class NotesRepositoryImpl : NotesRepository {
         }
 
         val firestore = firestoreInstance
-        if (firestore != null) {
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
             return callbackFlow {
+                // Emit cached note immediately
+                trySend(fallbackNotes.value[noteId])
+
                 var registration: ListenerRegistration? = null
                 try {
                     registration = firestore.collection("sharedNotes").document(noteId)
                         .addSnapshotListener { snapshot, error ->
                             if (error != null) {
-                                // Fallback to local memory if network error occurs
-                                val local = fallbackNotes.value[noteId]
-                                if (local != null) trySend(local)
+                                trySend(fallbackNotes.value[noteId])
                                 return@addSnapshotListener
                             }
                             if (snapshot != null && snapshot.exists()) {
-                                trySend(SharedNote.fromDocument(snapshot))
+                                val n = SharedNote.fromDocument(snapshot)
+                                fallbackNotes.value = fallbackNotes.value + (n.noteId to n)
+                                trySend(n)
                             } else {
                                 trySend(fallbackNotes.value[noteId])
                             }
@@ -285,8 +307,10 @@ class NotesRepositoryImpl : NotesRepository {
         }
 
         val firestore = firestoreInstance
-        if (firestore != null) {
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
             return callbackFlow {
+                trySend(fallbackQuestions.value[noteId] ?: emptyList())
+
                 var registration: ListenerRegistration? = null
                 try {
                     registration = firestore.collection("sharedNotes").document(noteId)
@@ -301,6 +325,7 @@ class NotesRepositoryImpl : NotesRepository {
                                 val questions = snapshot.documents.map { doc ->
                                     QuestionItem.fromDocument(doc)
                                 }
+                                fallbackQuestions.value = fallbackQuestions.value + (noteId to questions)
                                 trySend(questions)
                             }
                         }
@@ -328,32 +353,6 @@ class NotesRepositoryImpl : NotesRepository {
         val now = System.currentTimeMillis()
         val qId = "q_" + UUID.randomUUID().toString().replace("-", "").take(8)
 
-        val firestore = firestoreInstance
-        if (firestore != null) {
-            try {
-                val questionsCol = firestore.collection("sharedNotes").document(noteId).collection("questions")
-                val newDoc = questionsCol.document()
-                val data = hashMapOf(
-                    "questionId" to newDoc.id,
-                    "questionText" to questionText.trim(),
-                    "answerContent" to "",
-                    "formatting" to TextFormatting().toMap(),
-                    "createdBy" to userId,
-                    "createdByName" to userName,
-                    "updatedBy" to userId,
-                    "updatedByName" to userName,
-                    "createdAt" to now,
-                    "updatedAt" to now
-                )
-
-                newDoc.set(data).awaitTask()
-                firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
-                return Result.success(newDoc.id)
-            } catch (e: Throwable) {
-                Log.w("NotesRepositoryImpl", "Firestore createQuestion failed, using fallback: ${e.message}")
-            }
-        }
-
         val fallbackItem = QuestionItem(
             questionId = qId,
             questionText = questionText.trim(),
@@ -368,6 +367,33 @@ class NotesRepositoryImpl : NotesRepository {
         )
         val currentList = fallbackQuestions.value[noteId] ?: emptyList()
         fallbackQuestions.value = fallbackQuestions.value + (noteId to (currentList + fallbackItem))
+
+        val firestore = firestoreInstance
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
+            try {
+                withTimeoutOrNull(2500L) {
+                    val questionsCol = firestore.collection("sharedNotes").document(noteId).collection("questions")
+                    val newDoc = questionsCol.document()
+                    val data = hashMapOf(
+                        "questionId" to newDoc.id,
+                        "questionText" to questionText.trim(),
+                        "answerContent" to "",
+                        "formatting" to TextFormatting().toMap(),
+                        "createdBy" to userId,
+                        "createdByName" to userName,
+                        "updatedBy" to userId,
+                        "updatedByName" to userName,
+                        "createdAt" to now,
+                        "updatedAt" to now
+                    )
+                    newDoc.set(data).awaitTask()
+                    firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
+                }
+            } catch (e: Throwable) {
+                Log.w("NotesRepositoryImpl", "Firestore createQuestion failed: ${e.message}")
+            }
+        }
+
         return Result.success(qId)
     }
 
@@ -379,27 +405,6 @@ class NotesRepositoryImpl : NotesRepository {
         userName: String
     ): Result<Unit> {
         val now = System.currentTimeMillis()
-        val firestore = firestoreInstance
-        if (firestore != null) {
-            try {
-                firestore.collection("sharedNotes").document(noteId)
-                    .collection("questions")
-                    .document(questionId)
-                    .update(
-                        mapOf(
-                            "questionText" to questionText,
-                            "updatedBy" to userId,
-                            "updatedByName" to userName,
-                            "updatedAt" to now
-                        )
-                    ).awaitTask()
-                firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
-                return Result.success(Unit)
-            } catch (e: Throwable) {
-                Log.w("NotesRepositoryImpl", "Firestore updateQuestionText failed: ${e.message}")
-            }
-        }
-
         val currentList = fallbackQuestions.value[noteId] ?: emptyList()
         val updatedList = currentList.map {
             if (it.questionId == questionId) it.copy(
@@ -410,6 +415,29 @@ class NotesRepositoryImpl : NotesRepository {
             ) else it
         }
         fallbackQuestions.value = fallbackQuestions.value + (noteId to updatedList)
+
+        val firestore = firestoreInstance
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
+            try {
+                withTimeoutOrNull(2000L) {
+                    firestore.collection("sharedNotes").document(noteId)
+                        .collection("questions")
+                        .document(questionId)
+                        .update(
+                            mapOf(
+                                "questionText" to questionText,
+                                "updatedBy" to userId,
+                                "updatedByName" to userName,
+                                "updatedAt" to now
+                            )
+                        ).awaitTask()
+                    firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
+                }
+            } catch (e: Throwable) {
+                Log.w("NotesRepositoryImpl", "Firestore updateQuestionText failed: ${e.message}")
+            }
+        }
+
         return Result.success(Unit)
     }
 
@@ -421,27 +449,6 @@ class NotesRepositoryImpl : NotesRepository {
         userName: String
     ): Result<Unit> {
         val now = System.currentTimeMillis()
-        val firestore = firestoreInstance
-        if (firestore != null) {
-            try {
-                firestore.collection("sharedNotes").document(noteId)
-                    .collection("questions")
-                    .document(questionId)
-                    .update(
-                        mapOf(
-                            "answerContent" to answerContent,
-                            "updatedBy" to userId,
-                            "updatedByName" to userName,
-                            "updatedAt" to now
-                        )
-                    ).awaitTask()
-                firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
-                return Result.success(Unit)
-            } catch (e: Throwable) {
-                Log.w("NotesRepositoryImpl", "Firestore updateAnswerContent failed: ${e.message}")
-            }
-        }
-
         val currentList = fallbackQuestions.value[noteId] ?: emptyList()
         val updatedList = currentList.map {
             if (it.questionId == questionId) it.copy(
@@ -452,6 +459,29 @@ class NotesRepositoryImpl : NotesRepository {
             ) else it
         }
         fallbackQuestions.value = fallbackQuestions.value + (noteId to updatedList)
+
+        val firestore = firestoreInstance
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
+            try {
+                withTimeoutOrNull(2000L) {
+                    firestore.collection("sharedNotes").document(noteId)
+                        .collection("questions")
+                        .document(questionId)
+                        .update(
+                            mapOf(
+                                "answerContent" to answerContent,
+                                "updatedBy" to userId,
+                                "updatedByName" to userName,
+                                "updatedAt" to now
+                            )
+                        ).awaitTask()
+                    firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
+                }
+            } catch (e: Throwable) {
+                Log.w("NotesRepositoryImpl", "Firestore updateAnswerContent failed: ${e.message}")
+            }
+        }
+
         return Result.success(Unit)
     }
 
@@ -463,27 +493,6 @@ class NotesRepositoryImpl : NotesRepository {
         userName: String
     ): Result<Unit> {
         val now = System.currentTimeMillis()
-        val firestore = firestoreInstance
-        if (firestore != null) {
-            try {
-                firestore.collection("sharedNotes").document(noteId)
-                    .collection("questions")
-                    .document(questionId)
-                    .update(
-                        mapOf(
-                            "formatting" to formatting.toMap(),
-                            "updatedBy" to userId,
-                            "updatedByName" to userName,
-                            "updatedAt" to now
-                        )
-                    ).awaitTask()
-                firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
-                return Result.success(Unit)
-            } catch (e: Throwable) {
-                Log.w("NotesRepositoryImpl", "Firestore updateFormatting failed: ${e.message}")
-            }
-        }
-
         val currentList = fallbackQuestions.value[noteId] ?: emptyList()
         val updatedList = currentList.map {
             if (it.questionId == questionId) it.copy(
@@ -494,28 +503,52 @@ class NotesRepositoryImpl : NotesRepository {
             ) else it
         }
         fallbackQuestions.value = fallbackQuestions.value + (noteId to updatedList)
+
+        val firestore = firestoreInstance
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
+            try {
+                withTimeoutOrNull(2000L) {
+                    firestore.collection("sharedNotes").document(noteId)
+                        .collection("questions")
+                        .document(questionId)
+                        .update(
+                            mapOf(
+                                "formatting" to formatting.toMap(),
+                                "updatedBy" to userId,
+                                "updatedByName" to userName,
+                                "updatedAt" to now
+                            )
+                        ).awaitTask()
+                    firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
+                }
+            } catch (e: Throwable) {
+                Log.w("NotesRepositoryImpl", "Firestore updateFormatting failed: ${e.message}")
+            }
+        }
+
         return Result.success(Unit)
     }
 
     override suspend fun deleteQuestion(noteId: String, questionId: String): Result<Unit> {
-        val now = System.currentTimeMillis()
+        val currentList = fallbackQuestions.value[noteId] ?: emptyList()
+        fallbackQuestions.value = fallbackQuestions.value + (noteId to currentList.filter { it.questionId != questionId })
+
         val firestore = firestoreInstance
-        if (firestore != null) {
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
             try {
-                firestore.collection("sharedNotes").document(noteId)
-                    .collection("questions")
-                    .document(questionId)
-                    .delete()
-                    .awaitTask()
-                firestore.collection("sharedNotes").document(noteId).update("updatedAt", now)
-                return Result.success(Unit)
+                withTimeoutOrNull(2000L) {
+                    firestore.collection("sharedNotes").document(noteId)
+                        .collection("questions")
+                        .document(questionId)
+                        .delete()
+                        .awaitTask()
+                    firestore.collection("sharedNotes").document(noteId).update("updatedAt", System.currentTimeMillis())
+                }
             } catch (e: Throwable) {
                 Log.w("NotesRepositoryImpl", "Firestore deleteQuestion failed: ${e.message}")
             }
         }
 
-        val currentList = fallbackQuestions.value[noteId] ?: emptyList()
-        fallbackQuestions.value = fallbackQuestions.value + (noteId to currentList.filter { it.questionId != questionId })
         return Result.success(Unit)
     }
 
@@ -527,15 +560,14 @@ class NotesRepositoryImpl : NotesRepository {
         if (noteId.isEmpty() || userId.isEmpty()) return Result.success(Unit)
         val now = System.currentTimeMillis()
         val firestore = firestoreInstance
-        if (firestore != null) {
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
             try {
                 firestore.collection("sharedNotes").document(noteId).update(
                     mapOf(
                         "users.$userId.lastSeen" to now,
                         "users.$userId.isOnline" to isOnline
                     )
-                ).awaitTask()
-                return Result.success(Unit)
+                )
             } catch (_: Throwable) {}
         }
         return Result.success(Unit)
@@ -545,15 +577,14 @@ class NotesRepositoryImpl : NotesRepository {
         if (noteId.isEmpty() || userId.isEmpty()) return Result.success(Unit)
         val now = System.currentTimeMillis()
         val firestore = firestoreInstance
-        if (firestore != null) {
+        if (firestore != null && FirebaseConfigHelper.isRealConfig) {
             try {
                 firestore.collection("sharedNotes").document(noteId).update(
                     mapOf(
                         "users.$userId.isOnline" to false,
                         "users.$userId.lastSeen" to now
                     )
-                ).awaitTask()
-                return Result.success(Unit)
+                )
             } catch (_: Throwable) {}
         }
         return Result.success(Unit)

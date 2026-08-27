@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.FormatSpan
 import com.example.data.model.QuestionItem
 import com.example.data.model.SharedNote
 import com.example.data.model.TextFormatting
@@ -352,7 +353,31 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
+    fun onAnswerContentAndSpansChange(newContent: String, newSpans: List<FormatSpan>) {
+        val currentFormat = _uiState.value.localFormatting
+        val newFormat = currentFormat.copy(spans = newSpans)
+        _uiState.update {
+            it.copy(
+                localAnswerContent = newContent,
+                localFormatting = newFormat
+            )
+        }
+
+        val noteId = _uiState.value.currentNote?.noteId ?: return
+        val qId = _uiState.value.activeQuestionId ?: return
+        val uid = _uiState.value.userId
+        val uName = _uiState.value.userName
+
+        answerDebounceJob?.cancel()
+        answerDebounceJob = viewModelScope.launch {
+            delay(400L) // 400ms debounce
+            notesRepository.updateAnswerContent(noteId, qId, newContent, uid, uName)
+            notesRepository.updateFormatting(noteId, qId, newFormat, uid, uName)
+        }
+    }
+
     fun onAnswerContentChange(newContent: String) {
+        val currentFormat = _uiState.value.localFormatting
         _uiState.update { it.copy(localAnswerContent = newContent) }
 
         val noteId = _uiState.value.currentNote?.noteId ?: return
@@ -364,12 +389,43 @@ class MainViewModel @JvmOverloads constructor(
         answerDebounceJob = viewModelScope.launch {
             delay(400L) // 400ms debounce
             notesRepository.updateAnswerContent(noteId, qId, newContent, uid, uName)
+            notesRepository.updateFormatting(noteId, qId, currentFormat, uid, uName)
+        }
+    }
+
+    fun onToggleColor(active: Boolean) {
+        val currentFormat = _uiState.value.localFormatting
+        val newFormat = currentFormat.copy(isColorActive = active)
+        _uiState.update { it.copy(localFormatting = newFormat) }
+
+        val noteId = _uiState.value.currentNote?.noteId ?: return
+        val qId = _uiState.value.activeQuestionId ?: return
+        val uid = _uiState.value.userId
+        val uName = _uiState.value.userName
+
+        viewModelScope.launch {
+            notesRepository.updateFormatting(noteId, qId, newFormat, uid, uName)
         }
     }
 
     fun onTextColorChange(colorHex: String) {
         val currentFormat = _uiState.value.localFormatting
-        val newFormat = currentFormat.copy(colorHex = colorHex)
+        val newFormat = currentFormat.copy(colorHex = colorHex, isColorActive = true)
+        _uiState.update { it.copy(localFormatting = newFormat) }
+
+        val noteId = _uiState.value.currentNote?.noteId ?: return
+        val qId = _uiState.value.activeQuestionId ?: return
+        val uid = _uiState.value.userId
+        val uName = _uiState.value.userName
+
+        viewModelScope.launch {
+            notesRepository.updateFormatting(noteId, qId, newFormat, uid, uName)
+        }
+    }
+
+    fun onToggleSize(active: Boolean) {
+        val currentFormat = _uiState.value.localFormatting
+        val newFormat = currentFormat.copy(isSizeActive = active)
         _uiState.update { it.copy(localFormatting = newFormat) }
 
         val noteId = _uiState.value.currentNote?.noteId ?: return
@@ -384,7 +440,52 @@ class MainViewModel @JvmOverloads constructor(
 
     fun onTextSizeChange(sizeSp: Int) {
         val currentFormat = _uiState.value.localFormatting
-        val newFormat = currentFormat.copy(fontSizeSp = sizeSp)
+        val newFormat = currentFormat.copy(fontSizeSp = sizeSp, isSizeActive = true)
+        _uiState.update { it.copy(localFormatting = newFormat) }
+
+        val noteId = _uiState.value.currentNote?.noteId ?: return
+        val qId = _uiState.value.activeQuestionId ?: return
+        val uid = _uiState.value.userId
+        val uName = _uiState.value.userName
+
+        viewModelScope.launch {
+            notesRepository.updateFormatting(noteId, qId, newFormat, uid, uName)
+        }
+    }
+
+    fun onToggleBold(active: Boolean) {
+        val currentFormat = _uiState.value.localFormatting
+        val newFormat = currentFormat.copy(isBoldActive = active)
+        _uiState.update { it.copy(localFormatting = newFormat) }
+
+        val noteId = _uiState.value.currentNote?.noteId ?: return
+        val qId = _uiState.value.activeQuestionId ?: return
+        val uid = _uiState.value.userId
+        val uName = _uiState.value.userName
+
+        viewModelScope.launch {
+            notesRepository.updateFormatting(noteId, qId, newFormat, uid, uName)
+        }
+    }
+
+    fun onToggleItalic(active: Boolean) {
+        val currentFormat = _uiState.value.localFormatting
+        val newFormat = currentFormat.copy(isItalicActive = active)
+        _uiState.update { it.copy(localFormatting = newFormat) }
+
+        val noteId = _uiState.value.currentNote?.noteId ?: return
+        val qId = _uiState.value.activeQuestionId ?: return
+        val uid = _uiState.value.userId
+        val uName = _uiState.value.userName
+
+        viewModelScope.launch {
+            notesRepository.updateFormatting(noteId, qId, newFormat, uid, uName)
+        }
+    }
+
+    fun onToggleUnderline(active: Boolean) {
+        val currentFormat = _uiState.value.localFormatting
+        val newFormat = currentFormat.copy(isUnderlineActive = active)
         _uiState.update { it.copy(localFormatting = newFormat) }
 
         val noteId = _uiState.value.currentNote?.noteId ?: return

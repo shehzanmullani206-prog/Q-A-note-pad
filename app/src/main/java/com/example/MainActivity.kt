@@ -109,9 +109,14 @@ fun QANotesApp(
                 isSyncing = uiState.isSyncingQuestion,
                 onBack = { viewModel.closeQuestionDetail() },
                 onQuestionTextChange = { text -> viewModel.onQuestionTextChange(text) },
-                onAnswerContentChange = { content -> viewModel.onAnswerContentChange(content) },
+                onAnswerAndSpansChange = { content, spans -> viewModel.onAnswerContentAndSpansChange(content, spans) },
+                onToggleColor = { active -> viewModel.onToggleColor(active) },
                 onColorSelected = { colorHex -> viewModel.onTextColorChange(colorHex) },
-                onSizeSelected = { sizeSp -> viewModel.onTextSizeChange(sizeSp) }
+                onToggleSize = { active -> viewModel.onToggleSize(active) },
+                onSizeSelected = { sizeSp -> viewModel.onTextSizeChange(sizeSp) },
+                onToggleBold = { active -> viewModel.onToggleBold(active) },
+                onToggleItalic = { active -> viewModel.onToggleItalic(active) },
+                onToggleUnderline = { active -> viewModel.onToggleUnderline(active) }
             )
         }
     }

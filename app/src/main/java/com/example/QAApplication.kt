@@ -5,6 +5,11 @@ import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 
+object FirebaseConfigHelper {
+    @Volatile
+    var isRealConfig: Boolean = false
+}
+
 class QAApplication : Application() {
     override fun onCreate() {
         super.onCreate()
@@ -16,9 +21,18 @@ class QAApplication : Application() {
                     .setApiKey("AIzaSyMockKeyForOfflineSafetyFallback00")
                     .build()
                 FirebaseApp.initializeApp(this, options)
-                Log.d("QAApplication", "FirebaseApp initialized with fallback config")
+                FirebaseConfigHelper.isRealConfig = false
+                Log.d("QAApplication", "Firebase fallback initialized (Offline Mode)")
+            } else {
+                val app = FirebaseApp.getInstance()
+                val apiKey = app.options.apiKey
+                val projectId = app.options.projectId
+                val isMock = apiKey.contains("MockKey") || (projectId?.contains("fallback") == true)
+                FirebaseConfigHelper.isRealConfig = !isMock
+                Log.d("QAApplication", "Firebase initialized with real config: ${FirebaseConfigHelper.isRealConfig}")
             }
         } catch (e: Throwable) {
+            FirebaseConfigHelper.isRealConfig = false
             Log.e("QAApplication", "Firebase initialization handled safely: ${e.message}")
         }
     }

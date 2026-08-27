@@ -16,14 +16,25 @@ val AccentAmber = Color(0xFFD29922)
 val AccentCoral = Color(0xFFF85149)
 val AccentPurple = Color(0xFFBC8CFF)
 
-// Selectable Text Colors for Tool 1
-val FormatColors = listOf(
-    Color(0xFFF0F6FC) to "#F0F6FC", // Default Crisp White
-    Color(0xFF58A6FF) to "#58A6FF", // Blue / Cyan
-    Color(0xFF3FB950) to "#3FB950", // Green
-    Color(0xFFE3B341) to "#E3B341", // Amber / Yellow
-    Color(0xFFF85149) to "#F85149", // Coral / Red
-    Color(0xFFD2A8FF) to "#D2A8FF", // Purple
-    Color(0xFF79C0FF) to "#79C0FF", // Sky
-    Color(0xFFFFA657) to "#FFA657", // Orange
+// Selectable Text Colors for Tool 1 with names
+data class NamedColor(
+    val color: Color,
+    val hex: String,
+    val name: String
 )
+
+val FormatColors = listOf(
+    NamedColor(Color(0xFFF0F6FC), "#F0F6FC", "White"),
+    NamedColor(Color(0xFF58A6FF), "#58A6FF", "Cyan Blue"),
+    NamedColor(Color(0xFF3FB950), "#3FB950", "Emerald"),
+    NamedColor(Color(0xFFE3B341), "#E3B341", "Gold"),
+    NamedColor(Color(0xFFF85149), "#F85149", "Coral"),
+    NamedColor(Color(0xFFBC8CFF), "#BC8CFF", "Purple"),
+    NamedColor(Color(0xFF79C0FF), "#79C0FF", "Sky"),
+    NamedColor(Color(0xFFFFA657), "#FFA657", "Orange"),
+    NamedColor(Color(0xFFFF7B72), "#FF7B72", "Pink"),
+    NamedColor(Color(0xFF7EE787), "#7EE787", "Mint"),
+    NamedColor(Color(0xFFD2A8FF), "#D2A8FF", "Lavender"),
+    NamedColor(Color(0xFFF2CC60), "#F2CC60", "Yellow")
+)
+
