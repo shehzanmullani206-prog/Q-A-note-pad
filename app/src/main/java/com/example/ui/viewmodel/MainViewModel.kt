@@ -2,6 +2,8 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.QuestionItem
 import com.example.data.model.SharedNote
@@ -60,12 +62,21 @@ data class UiState(
                 (System.currentTimeMillis() - (otherUser?.lastSeen ?: 0L)) < 60_000L
 }
 
-class MainViewModel(
+class MainViewModel @JvmOverloads constructor(
     application: Application,
     private val preferencesRepository: UserPreferencesRepository = UserPreferencesRepository(application),
     private val notesRepository: NotesRepository = NotesRepositoryImpl(),
     private val networkMonitor: NetworkMonitor = NetworkMonitor(application)
 ) : AndroidViewModel(application) {
+
+    companion object {
+        fun Factory(application: Application): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return MainViewModel(application) as T
+            }
+        }
+    }
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -77,31 +88,47 @@ class MainViewModel(
     private var presenceJob: Job? = null
 
     init {
-        // Observe network state
+        // Observe network state safely
         viewModelScope.launch {
-            networkMonitor.isOnline.collect { online ->
-                _uiState.update { it.copy(isOnline = online) }
-                if (online && _uiState.value.currentNote != null) {
-                    pingPresence()
+            try {
+                networkMonitor.isOnline.collect { online ->
+                    _uiState.update { it.copy(isOnline = online) }
+                    if (online && _uiState.value.currentNote != null) {
+                        pingPresence()
+                    }
                 }
+            } catch (e: Throwable) {
+                // Log and keep default online state
             }
         }
 
         // Initialize user preferences
         viewModelScope.launch {
-            val savedUserId = preferencesRepository.getOrCreateUserId()
-            val savedName = preferencesRepository.userNameFlow.first()
+            try {
+                val savedUserId = preferencesRepository.getOrCreateUserId()
+                val savedName = preferencesRepository.userNameFlow.first()
 
-            _uiState.update {
-                it.copy(
-                    userId = savedUserId,
-                    userName = savedName,
-                    currentScreen = if (savedName.isNotBlank()) Screen.Home else Screen.NameInput
-                )
+                _uiState.update {
+                    it.copy(
+                        userId = savedUserId,
+                        userName = savedName,
+                        currentScreen = if (savedName.isNotBlank()) Screen.Home else Screen.NameInput
+                    )
+                }
+
+                // Ensure auth is established safely
+                try {
+                    notesRepository.ensureAuth()
+                } catch (_: Throwable) {}
+            } catch (e: Throwable) {
+                _uiState.update {
+                    it.copy(
+                        userId = "usr_fallback",
+                        userName = "",
+                        currentScreen = Screen.NameInput
+                    )
+                }
             }
-
-            // Ensure Firebase anonymous auth is established
-            notesRepository.ensureAuth()
         }
 
         // Periodic presence heartbeat

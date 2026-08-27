@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -10,6 +11,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.screens.HomeScreen
@@ -40,7 +42,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun QANotesApp(
-    viewModel: MainViewModel = viewModel()
+    viewModel: MainViewModel = viewModel(
+        factory = MainViewModel.Factory(LocalContext.current.applicationContext as Application)
+    )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 

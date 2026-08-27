@@ -1,14 +1,18 @@
 package com.example.data.preferences
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 import java.util.UUID
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "user_preferences")
@@ -22,48 +26,78 @@ class UserPreferencesRepository(private val context: Context) {
         val LAST_SHARE_CODE = stringPreferencesKey("last_share_code")
     }
 
-    val userNameFlow: Flow<String> = context.dataStore.data.map { preferences ->
+    private val safeData: Flow<Preferences> = context.dataStore.data.catch { exception ->
+        if (exception is IOException) {
+            Log.w("UserPrefsRepo", "DataStore IOException: ${exception.message}", exception)
+            emit(emptyPreferences())
+        } else {
+            Log.e("UserPrefsRepo", "DataStore exception: ${exception.message}", exception)
+            emit(emptyPreferences())
+        }
+    }
+
+    val userNameFlow: Flow<String> = safeData.map { preferences ->
         preferences[Keys.USER_NAME] ?: ""
     }
 
-    val userIdFlow: Flow<String> = context.dataStore.data.map { preferences ->
+    val userIdFlow: Flow<String> = safeData.map { preferences ->
         preferences[Keys.USER_ID] ?: ""
     }
 
-    val lastNoteIdFlow: Flow<String> = context.dataStore.data.map { preferences ->
+    val lastNoteIdFlow: Flow<String> = safeData.map { preferences ->
         preferences[Keys.LAST_NOTE_ID] ?: ""
     }
 
     suspend fun getOrCreateUserId(): String {
-        val currentPrefs = context.dataStore.data.first()
-        val existingId = currentPrefs[Keys.USER_ID]
-        if (!existingId.isNullOrEmpty()) {
-            return existingId
+        return try {
+            val currentPrefs = safeData.first()
+            val existingId = currentPrefs[Keys.USER_ID]
+            if (!existingId.isNullOrEmpty()) {
+                return existingId
+            }
+            val newId = "usr_" + UUID.randomUUID().toString().replace("-", "").take(10)
+            try {
+                context.dataStore.edit { preferences ->
+                    preferences[Keys.USER_ID] = newId
+                }
+            } catch (e: Throwable) {
+                Log.w("UserPrefsRepo", "Failed saving userId to DataStore: ${e.message}")
+            }
+            newId
+        } catch (e: Throwable) {
+            "usr_" + UUID.randomUUID().toString().replace("-", "").take(10)
         }
-        val newId = "usr_" + UUID.randomUUID().toString().replace("-", "").take(10)
-        context.dataStore.edit { preferences ->
-            preferences[Keys.USER_ID] = newId
-        }
-        return newId
     }
 
     suspend fun saveUserName(name: String) {
-        context.dataStore.edit { preferences ->
-            preferences[Keys.USER_NAME] = name.trim()
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[Keys.USER_NAME] = name.trim()
+            }
+        } catch (e: Throwable) {
+            Log.w("UserPrefsRepo", "Failed saving userName: ${e.message}")
         }
     }
 
     suspend fun saveLastNote(noteId: String, shareCode: String) {
-        context.dataStore.edit { preferences ->
-            preferences[Keys.LAST_NOTE_ID] = noteId
-            preferences[Keys.LAST_SHARE_CODE] = shareCode
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[Keys.LAST_NOTE_ID] = noteId
+                preferences[Keys.LAST_SHARE_CODE] = shareCode
+            }
+        } catch (e: Throwable) {
+            Log.w("UserPrefsRepo", "Failed saving last note: ${e.message}")
         }
     }
 
     suspend fun clearLastNote() {
-        context.dataStore.edit { preferences ->
-            preferences.remove(Keys.LAST_NOTE_ID)
-            preferences.remove(Keys.LAST_SHARE_CODE)
+        try {
+            context.dataStore.edit { preferences ->
+                preferences.remove(Keys.LAST_NOTE_ID)
+                preferences.remove(Keys.LAST_SHARE_CODE)
+            }
+        } catch (e: Throwable) {
+            Log.w("UserPrefsRepo", "Failed clearing last note: ${e.message}")
         }
     }
 }

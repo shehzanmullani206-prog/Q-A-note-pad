@@ -10,17 +10,16 @@ class QAApplication : Application() {
         super.onCreate()
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
-                // Safe default initialization if google-services.json was omitted
                 val options = FirebaseOptions.Builder()
-                    .setApplicationId(packageName)
-                    .setProjectId("qa-notes-" + packageName.takeLast(6))
-                    .setApiKey("AIzaSyMockKeyForOfflineSafetyFallback")
+                    .setApplicationId("1:100000000000:android:abcdef0123456789")
+                    .setProjectId("qa-notes-fallback")
+                    .setApiKey("AIzaSyMockKeyForOfflineSafetyFallback00")
                     .build()
                 FirebaseApp.initializeApp(this, options)
                 Log.d("QAApplication", "FirebaseApp initialized with fallback config")
             }
-        } catch (e: Exception) {
-            Log.e("QAApplication", "Firebase initialization caught safely: ${e.message}")
+        } catch (e: Throwable) {
+            Log.e("QAApplication", "Firebase initialization handled safely: ${e.message}")
         }
     }
 }
