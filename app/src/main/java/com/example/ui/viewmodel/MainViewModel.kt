@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.local.AppDatabase
 import com.example.data.model.FormatSpan
 import com.example.data.model.QuestionItem
 import com.example.data.model.SharedNote
@@ -66,7 +67,7 @@ data class UiState(
 class MainViewModel @JvmOverloads constructor(
     application: Application,
     private val preferencesRepository: UserPreferencesRepository = UserPreferencesRepository(application),
-    private val notesRepository: NotesRepository = NotesRepositoryImpl(),
+    private val notesRepository: NotesRepository = NotesRepositoryImpl(AppDatabase.getDatabase(application)),
     private val networkMonitor: NetworkMonitor = NetworkMonitor(application)
 ) : AndroidViewModel(application) {
 
@@ -103,18 +104,47 @@ class MainViewModel @JvmOverloads constructor(
             }
         }
 
-        // Initialize user preferences
+        // Initialize user preferences and auto-resume joined/created note session
         viewModelScope.launch {
             try {
                 val savedUserId = preferencesRepository.getOrCreateUserId()
                 val savedName = preferencesRepository.userNameFlow.first()
 
+                if (savedName.isBlank()) {
+                    _uiState.update {
+                        it.copy(
+                            userId = savedUserId,
+                            userName = "",
+                            currentScreen = Screen.NameInput
+                        )
+                    }
+                    return@launch
+                }
+
                 _uiState.update {
                     it.copy(
                         userId = savedUserId,
                         userName = savedName,
-                        currentScreen = if (savedName.isNotBlank()) Screen.Home else Screen.NameInput
+                        currentScreen = Screen.Home
                     )
+                }
+
+                // Check for saved note (created or joined previously)
+                val (lastNoteId, lastShareCode) = preferencesRepository.getLastNoteInfo()
+                val restoredNote = if (lastNoteId.isNotBlank() || lastShareCode.isNotBlank()) {
+                    notesRepository.restoreNote(lastNoteId, lastShareCode, savedUserId, savedName)
+                } else {
+                    notesRepository.getRecentNote()
+                }
+
+                if (restoredNote != null) {
+                    _uiState.update {
+                        it.copy(
+                            currentNote = restoredNote,
+                            currentScreen = Screen.QuestionList
+                        )
+                    }
+                    observeCurrentNote(restoredNote.noteId)
                 }
 
                 // Ensure auth is established safely

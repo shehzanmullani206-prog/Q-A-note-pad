@@ -24,6 +24,7 @@ class UserPreferencesRepository(private val context: Context) {
         val USER_NAME = stringPreferencesKey("user_name")
         val LAST_NOTE_ID = stringPreferencesKey("last_note_id")
         val LAST_SHARE_CODE = stringPreferencesKey("last_share_code")
+        val LAST_ACTIVE_QUESTION_ID = stringPreferencesKey("last_active_question_id")
     }
 
     private val safeData: Flow<Preferences> = context.dataStore.data.catch { exception ->
@@ -46,6 +47,45 @@ class UserPreferencesRepository(private val context: Context) {
 
     val lastNoteIdFlow: Flow<String> = safeData.map { preferences ->
         preferences[Keys.LAST_NOTE_ID] ?: ""
+    }
+
+    val lastShareCodeFlow: Flow<String> = safeData.map { preferences ->
+        preferences[Keys.LAST_SHARE_CODE] ?: ""
+    }
+
+    val lastActiveQuestionIdFlow: Flow<String> = safeData.map { preferences ->
+        preferences[Keys.LAST_ACTIVE_QUESTION_ID] ?: ""
+    }
+
+    suspend fun getLastNoteInfo(): Pair<String, String> {
+        return try {
+            val current = safeData.first()
+            Pair(current[Keys.LAST_NOTE_ID] ?: "", current[Keys.LAST_SHARE_CODE] ?: "")
+        } catch (_: Exception) {
+            Pair("", "")
+        }
+    }
+
+    suspend fun getLastActiveQuestionId(): String {
+        return try {
+            safeData.first()[Keys.LAST_ACTIVE_QUESTION_ID] ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    suspend fun saveLastActiveQuestion(questionId: String) {
+        try {
+            context.dataStore.edit { preferences ->
+                if (questionId.isNotBlank()) {
+                    preferences[Keys.LAST_ACTIVE_QUESTION_ID] = questionId
+                } else {
+                    preferences.remove(Keys.LAST_ACTIVE_QUESTION_ID)
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w("UserPrefsRepo", "Failed saving active question: ${e.message}")
+        }
     }
 
     suspend fun getOrCreateUserId(): String {

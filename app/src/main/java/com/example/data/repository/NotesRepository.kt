@@ -15,6 +15,8 @@ interface NotesRepository {
     suspend fun ensureAuth(): String
     suspend fun createNote(userId: String, userName: String, title: String = "Collaborative Q&A"): Result<SharedNote>
     suspend fun joinNote(shareCode: String, userId: String, userName: String): JoinResult
+    suspend fun restoreNote(noteId: String, shareCode: String = "", userId: String, userName: String): SharedNote?
+    suspend fun getRecentNote(): SharedNote?
     fun observeNote(noteId: String): Flow<SharedNote?>
     fun observeQuestions(noteId: String): Flow<List<QuestionItem>>
     suspend fun createQuestion(
